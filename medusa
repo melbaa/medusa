@@ -1,0 +1,180 @@
+#!/usr/bin/env python
+
+import argparse
+import json
+import sys
+import os
+import signal
+
+import yaml
+from plumbum import FG
+from plumbum.cmd import aws
+from plumbum.cmd import psql
+from plumbum.cmd import dig
+from plumbum.cmd import mysql
+
+
+AWS_TYPE_REDSHIFT = 'redishft'
+AWS_TYPE_RDS_POSTGRES = 'rds-postgres'
+AWS_TYPE_RDS_MYSQL = 'rds-mysql'
+
+
+
+# https://stackoverflow.com/questions/9306100/how-can-i-tell-if-a-child-is-asking-for-stdin-how-do-i-tell-it-to-stop-that
+# https://stackoverflow.com/questions/15200700/how-do-i-set-the-terminal-foreground-process-group-for-a-process-im-running-und
+# http://curiousthing.org/sigttin-sigttou-deep-dive-linux
+"""
+
+SIGTTIN is the Kernel’s way of telling Python that it won’t get input just now because it’s not in the foreground. If Python is brought back to the foreground, the shell would send a SIGCONT signal to instruct Python to resume (and Python would have to retry read()-ing).
+
+SIGTTOU does something similar, but for writes. However, note that “writing” to the TTY can mean either of two things:
+
+    Writing to stdout or stderr.
+    Changing terminal settings.
+"""
+def become_fg_process_group():
+    # we are going to get SIGTTOU because terminal settings change, which would put us to sleep
+    hdlr = signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    os.setpgrp()  # create a new process group so the newly started process can get ctrl-c,z
+    tty = os.open('/dev/tty', os.O_RDWR)
+    os.tcsetpgrp(tty, os.getpgrp())  # make the process group foreground for the tty
+    os.close(tty)
+    signal.signal(signal.SIGTTOU, hdlr)  # restore normal signal handling
+
+def format_cmd(cmd):
+    # TODO add environment vars with shlex.quote
+    return str(cmd)
+
+def run_fg(cmd):
+    print('running:', format_cmd(cmd))
+    cmd(stdin=None, stdout=None, stderr=None, preexec_fn=become_fg_process_group)
+
+def build_alias_lookup_table(credentials):
+    tbl = dict()
+    for db_identifier in credentials:
+        aliases = credentials[db_identifier]['aliases']
+        for alias in aliases:
+            tbl[alias] = db_identifier
+    return tbl
+
+def get_redshift_private_ip_port(aws_identifier):
+    out = aws['redshift', 'describe-clusters', '--cluster-identifier', aws_identifier]()
+    reply = json.loads(out)
+    clusters = reply['Clusters']
+    if len(clusters) != 1:
+        print('unexpected clusters result')
+        sys.exit(1)
+    cluster = clusters[0]
+    for node in cluster['ClusterNodes']:
+        if node['NodeRole'] != 'LEADER':
+            continue
+        return node['PrivateIPAddress'], cluster['Endpoint']['Port']
+    print('leader node ip addr not found')
+    sys.exit(1)
+
+def get_rds_private_ip_port(aws_identifier, dns_servers):
+
+    out = aws['rds', 'describe-db-instances', '--db-instance-identifier', aws_identifier]()
+    reply = json.loads(out)
+
+    # pp reply['DBInstances'][0]['Endpoint']
+    # {'Address': 'prod-rds-unicorn.cujpo2r0mujo.us-east-1.rds.amazonaws.com',
+    # 'HostedZoneId': 'Z2R2ITUGPM61AM',
+    # 'Port': 5432}
+
+    endpoint = reply['DBInstances'][0]['Endpoint']
+    dns = endpoint['Address']
+    port = endpoint['Port']
+    private_ip = dig['+short', '@' + DNS_SERVERS['us_prod'], dns]()
+    private_ip = private_ip.strip()
+    return private_ip, port
+
+def load_config():
+    path = '~/.medusarc'
+    path = os.path.expanduser(path)
+    with open(path) as f:
+        config = yaml.load(f)
+    return config['datastores'], config['settings']
+
+def main():
+    credentials, settings = load_config()
+
+    # In EC2-VPC, the Amazon DNS server is located at the base of your VPC network range plus two
+    # For example, the DNS Server on a 10.0.0.0/16 network is located at 10.0.0.2.
+    # For VPCs with multiple IPv4 CIDR blocks, the DNS server IP address is located in the primary CIDR block.
+    # too hard to resolve VPC subnet, hardcode
+    dns_servers = settings['dns_servers']
+
+    argv = sys.argv
+    cmd = argv.pop(0)
+
+    # util to use local psql via VPN
+    # db_identifier, user, database change depending on passed value
+
+    # TODO implement mysql support (auxdb)
+    # TODO implement redis support (fileingest, tvc). might need database aliases or descriptions
+    # TODO implement multi aws account support
+    # TODO implement partial prefix matches + check for ambiguous prefixes
+
+    db_aliases = build_alias_lookup_table(credentials)
+    db_identifiers = list(db_aliases.keys())
+    if not len(argv):
+        print('expected db identifier, allowed values are {}'.format(db_identifiers))
+        sys.exit(1)
+
+    db_identifier = argv.pop(0)
+    if db_identifier not in db_identifiers:
+        print('expected db identifier, allowed values are {}'.format(db_identifiers))
+        sys.exit(1)
+
+
+    db_identifier = db_aliases[db_identifier]
+    db_users = list(credentials[db_identifier]['users'].keys())
+    if not len(argv):
+        print('expected db user, allowed values for {} are {}'.format(db_identifier, db_users))
+        sys.exit(1)
+
+    db_user = argv.pop(0)
+    if db_user not in db_users:
+        print('expected db user, allowed values for {} are {}'.format(db_identifier, db_users))
+        sys.exit(1)
+
+    db_password = credentials[db_identifier]['users'][db_user]
+
+    db_names = credentials[db_identifier]['databases']
+    if not len(argv):
+        print('expected db name, allowed values for {} are {}'.format(db_identifier, db_names))
+        sys.exit(1)
+
+    db_name = argv.pop(0)
+    if db_name not in db_names:
+        print('expected db name, allowed values for {} are {}'.format(db_identifier, db_names))
+        sys.exit(1)
+
+    aws_identifier = credentials[db_identifier]['aws_identifier']
+    aws_type = credentials[db_identifier]['aws_type']
+    if aws_type == AWS_TYPE_REDSHIFT:
+        ip, port = get_redshift_private_ip_port(aws_identifier)
+
+        psql_env = psql.setenv(PGPASSWORD=db_password)
+        cmd = psql_env['-U', db_user, '-h', ip, '--port', port, db_name]
+    elif aws_type == AWS_TYPE_RDS_POSTGRES:
+        ip, port = get_rds_private_ip_port(aws_identifier, dns_servers)
+
+        psql_env = psql.setenv(PGPASSWORD=db_password)
+        cmd = psql_env['-U', db_user, '-h', ip, '--port', port, db_name]
+    elif aws_type == AWS_TYPE_RDS_MYSQL:
+        ip, port = get_rds_private_ip_port(aws_identifier, dns_servers)
+
+        password = '-p' + db_password
+        cmd = mysql['-u', db_user, password, '-h', ip, '--port', port, db_name]
+    else:
+        raise RuntimeError('unknown aws_type {}'.format(aws_type))
+
+    run_fg(cmd)
+
+
+if __name__ == '__main__':
+    main()
+
+# vim: set syntax=python
