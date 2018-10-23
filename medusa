@@ -19,7 +19,6 @@ AWS_TYPE_RDS_POSTGRES = 'rds-postgres'
 AWS_TYPE_RDS_MYSQL = 'rds-mysql'
 
 
-
 # https://stackoverflow.com/questions/9306100/how-can-i-tell-if-a-child-is-asking-for-stdin-how-do-i-tell-it-to-stop-that
 # https://stackoverflow.com/questions/15200700/how-do-i-set-the-terminal-foreground-process-group-for-a-process-im-running-und
 # http://curiousthing.org/sigttin-sigttou-deep-dive-linux
@@ -85,7 +84,7 @@ def get_rds_private_ip_port(aws_identifier, dns_servers):
     endpoint = reply['DBInstances'][0]['Endpoint']
     dns = endpoint['Address']
     port = endpoint['Port']
-    private_ip = dig['+short', '@' + DNS_SERVERS['us_prod'], dns]()
+    private_ip = dig['+short', '@' + dns_servers['us_prod'], dns]()
     private_ip = private_ip.strip()
     return private_ip, port
 
@@ -108,10 +107,8 @@ def main():
     argv = sys.argv
     cmd = argv.pop(0)
 
-    # util to use local psql via VPN
     # db_identifier, user, database change depending on passed value
 
-    # TODO implement mysql support (auxdb)
     # TODO implement redis support (fileingest, tvc). might need database aliases or descriptions
     # TODO implement multi aws account support
     # TODO implement partial prefix matches + check for ambiguous prefixes
