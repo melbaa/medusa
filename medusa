@@ -40,9 +40,21 @@ def become_fg_process_group():
     os.close(tty)
     signal.signal(signal.SIGTTOU, hdlr)  # restore normal signal handling
 
+def get_environ(cmd):
+    if hasattr(cmd, 'envvars'):
+        return cmd.envvars
+    if hasattr(cmd, 'cmd'):
+        return get_environ(cmd.cmd)
+    # couldn't find anything
+    return {}
+
 def format_cmd(cmd):
     # TODO add environment vars with shlex.quote
-    return str(cmd)
+    environ = get_environ(cmd)
+    environ_str = ''
+    for k,v in environ.items():
+        environ_str += '{}={} '.format(k,v)
+    return environ_str + str(cmd)
 
 def run_fg(cmd):
     print('running:', format_cmd(cmd))
