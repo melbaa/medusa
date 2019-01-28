@@ -23,12 +23,6 @@ AWS_TYPE_RDS_POSTGRES = 'rds-postgres'
 AWS_TYPE_RDS_MYSQL = 'rds-mysql'
 AWS_TYPE_ELASTICACHE_REDIS = 'elasticache-redis'
 
-RedshiftUserInput = collections.namedtuple('RedshiftUserInput', ['db_identifier', 'user', 'db_name'])
-PsqlUserInput = collections.namedtuple('PsqlUserInput', ['db_identifier', 'user', 'db_name'])
-MysqlUserInput = collections.namedtuple('MysqlUserInput', ['db_identifier', 'user', 'db_name'])
-ElasticacheRedisUserInput = collections.namedtuple('ElasticacheRedisUserInput', ['db_identifier', 'db_name'])
-
-
 # https://stackoverflow.com/questions/9306100/how-can-i-tell-if-a-child-is-asking-for-stdin-how-do-i-tell-it-to-stop-that
 # https://stackoverflow.com/questions/15200700/how-do-i-set-the-terminal-foreground-process-group-for-a-process-im-running-und
 # http://curiousthing.org/sigttin-sigttou-deep-dive-linux
@@ -188,31 +182,58 @@ def get_db_identifier(argv, db_aliases, credentials):
     db_identifier = db_aliases[db_identifier]
     return db_identifier
 
-def get_user_input(argv, db_aliases, credentials):
-    user_input = None
-
-    db_identifier = get_db_identifier(argv, db_aliases, credentials)
-
-    aws_type = credentials[db_identifier]['aws_type']
-    input_cls, *get_params = aws_type_to_input[aws_type]
-
-    user_input = {
-        k: get_param(argv, db_identifier, credentials)
-        for k, get_param in zip(input_cls._fields[1:], get_params)
-    }
-    user_input['db_identifier'] = db_identifier
-
-    user_input = input_cls(**user_input)
-
-    return user_input, aws_type
 
 
-aws_type_to_input = {
-        AWS_TYPE_REDSHIFT: (RedshiftUserInput, get_user, get_db),
-        AWS_TYPE_RDS_POSTGRES: (PsqlUserInput, get_user, get_db),
-        AWS_TYPE_RDS_MYSQL: (MysqlUserInput, get_user, get_db),
-        AWS_TYPE_ELASTICACHE_REDIS: (ElasticacheRedisUserInput, get_db),
+def redshift_cmd(argv, db_identifier, credentials, dns_servers):
+    db_user, db_password = get_user(argv, db_identifier, credentials)
+    db_name = get_db(argv, db_identifier, credentials)
+
+    aws_identifier = credentials[db_identifier]['aws_identifier']
+    ip, port = get_redshift_private_ip_port(aws_identifier)
+
+    psql_env = psql.setenv(PGPASSWORD=db_password)
+    cmd = psql_env['-U', db_user, '-h', ip, '--port', port, db_name]
+    return cmd
+
+def postgres_cmd(argv, db_identifier, credentials, dns_servers):
+    db_user, db_password = get_user(argv, db_identifier, credentials)
+    db_name = get_db(argv, db_identifier, credentials)
+
+    aws_identifier = credentials[db_identifier]['aws_identifier']
+    ip, port = get_rds_private_ip_port(aws_identifier, dns_servers)
+
+    psql_env = psql.setenv(PGPASSWORD=db_password)
+    cmd = psql_env['-U', db_user, '-h', ip, '--port', port, db_name]
+    return cmd
+
+def mysql_cmd(argv, db_identifier, credentials, dns_servers):
+    db_user, db_password = get_user(argv, db_identifier, credentials)
+    db_name = get_db(argv, db_identifier, credentials)
+
+    aws_identifier = credentials[db_identifier]['aws_identifier']
+    ip, port = get_rds_private_ip_port(aws_identifier, dns_servers)
+
+    password = '-p' + db_password
+    cmd = mysql['-u', db_user, password, '-h', ip, '--port', port, db_name]
+    return cmd
+
+def redis_cmd(argv, db_identifier, credentials, dns_servers):
+    db_name = get_db(argv, db_identifier, credentials)
+
+    aws_identifier = credentials[db_identifier]['aws_identifier']
+    ip, port = get_elasticache_private_ip_port(aws_identifier, dns_servers)
+
+    cmd = rediscli['-h', ip, '-p', port, '-n', db_name]
+    return cmd
+
+aws_type_to_cmd = {
+    AWS_TYPE_REDSHIFT: redshift_cmd,
+    AWS_TYPE_RDS_POSTGRES: postgres_cmd,
+    AWS_TYPE_RDS_MYSQL: mysql_cmd,
+    AWS_TYPE_ELASTICACHE_REDIS: redis_cmd,
 }
+
+
 
 def main():
     credentials, settings = load_config()
@@ -237,37 +258,13 @@ def main():
 
     db_aliases = build_alias_lookup_table(credentials)
 
-    user_input, aws_type = get_user_input(argv, db_aliases, credentials)
-    aws_identifier = credentials[user_input.db_identifier]['aws_identifier']
-
-    if aws_type == AWS_TYPE_REDSHIFT:
-        db_user, db_password = user_input.user
-        db_name = user_input.db_name
-        ip, port = get_redshift_private_ip_port(aws_identifier)
-
-        psql_env = psql.setenv(PGPASSWORD=db_password)
-        cmd = psql_env['-U', db_user, '-h', ip, '--port', port, db_name]
-    elif aws_type == AWS_TYPE_RDS_POSTGRES:
-        db_user, db_password = user_input.user
-        db_name = user_input.db_name
-        ip, port = get_rds_private_ip_port(aws_identifier, dns_servers)
-
-        psql_env = psql.setenv(PGPASSWORD=db_password)
-        cmd = psql_env['-U', db_user, '-h', ip, '--port', port, db_name]
-    elif aws_type == AWS_TYPE_RDS_MYSQL:
-        db_user, db_password = user_input.user
-        db_name = user_input.db_name
-        ip, port = get_rds_private_ip_port(aws_identifier, dns_servers)
-
-        password = '-p' + db_password
-        cmd = mysql['-u', db_user, password, '-h', ip, '--port', port, db_name]
-    elif aws_type == AWS_TYPE_ELASTICACHE_REDIS:
-        db_name = user_input.db_name
-        ip, port = get_elasticache_private_ip_port(aws_identifier, dns_servers)
-
-        cmd = rediscli['-h', ip, '-p', port, '-n', db_name]
-    else:
-        raise RuntimeError('unknown aws_type {}'.format(aws_type))
+    db_identifier = get_db_identifier(argv, db_aliases, credentials)
+    aws_type = credentials[db_identifier]['aws_type']
+    cmd_fn = aws_type_to_cmd.get(aws_type)
+    if not cmd_fn:
+        print('unknown aws_type {}'.format(aws_type))
+        sys.exit(1)
+    cmd = cmd_fn(argv, db_identifier, credentials, dns_servers)
 
     run_fg(cmd)
 
