@@ -6,6 +6,7 @@ import sys
 import os
 import signal
 import collections
+import ipaddress
 
 import yaml
 from plumbum import FG
@@ -22,6 +23,9 @@ AWS_TYPE_REDSHIFT = 'redishft'
 AWS_TYPE_RDS_POSTGRES = 'rds-postgres'
 AWS_TYPE_RDS_MYSQL = 'rds-mysql'
 AWS_TYPE_ELASTICACHE_REDIS = 'elasticache-redis'
+
+class NotPrivateIpError(Exception):
+    pass
 
 # https://stackoverflow.com/questions/9306100/how-can-i-tell-if-a-child-is-asking-for-stdin-how-do-i-tell-it-to-stop-that
 # https://stackoverflow.com/questions/15200700/how-do-i-set-the-terminal-foreground-process-group-for-a-process-im-running-und
@@ -93,6 +97,7 @@ def get_redshift_private_ip_port(aws_identifier):
 def resolve_dns(dns, dns_servers):
     private_ip = dig['+short', '@' + dns_servers, dns]()
     private_ip = private_ip.strip().split('\n')[-1]
+
     return private_ip
 
 def get_rds_private_ip_port(aws_identifier, dns_servers):
@@ -111,24 +116,46 @@ def get_rds_private_ip_port(aws_identifier, dns_servers):
     private_ip = resolve_dns(dns, dns_servers)
     return private_ip, port
 
-def get_elasticache_private_ip_port(aws_identifier, dns_servers):
+def get_elasticache_clusters():
+    rc, out, err = aws['elasticache', 'describe-cache-clusters', '--show-cache-node-info'].run(retcode=None)
+    if rc:
+        raise RuntimeError(rc, out, err)
+    reply = json.loads(out)['CacheClusters']
+    return reply
+
+def get_elasticache_private_ip_port(aws_identifier, dns_servers, cache_node_id):
     # aws elasticache describe-replication-groups
     # aws elasticache describe-cache-clusters --show-cache-node-info # single node clusters
-    rc, out, err = aws['elasticache', 'describe-replication-groups', '--replication-group-id', aws_identifier].run(retcode=None)
-    if rc:
-        # out = aws['elasticache', 'describe-cache-clusters', '--cache-cluster-id', aws_identifier]()
-        raise RuntimeError('single node clusters not implemented')
-    reply = json.loads(out)
-    node_groups = reply['ReplicationGroups'][0]['NodeGroups']
-    for n in node_groups:
-        dns = n['PrimaryEndpoint']['Address']
-        port = n['PrimaryEndpoint']['Port']
-        print('endpoint for group', n['NodeGroupId'], dns, port)
-        ans = input('use this? (y/n/enter) ').lower().strip()
-        if ans == 'y':
-            private_ip = resolve_dns(dns, dns_servers)
-            return private_ip, port
-    raise RuntimeError("didn't pick endpoint")
+
+
+    clusters = get_elasticache_clusters()
+
+    for cluster in clusters:
+        replication_group_id = cluster.get('ReplicationGroupId', '')
+        cache_cluster_id = cluster.get('CacheClusterId', '')
+        cache_nodes = cluster['CacheNodes']
+        # if aws_identifier == replication_group_id or aws_identifier == cache_cluster_id:
+        if aws_identifier == cache_cluster_id:
+            break
+    else:
+        cache_cluster_ids = [ cluster['CacheClusterId'] for cluster in clusters ]
+        cache_cluster_ids = sorted(cache_cluster_ids)
+        raise RuntimeError('{} not found in elasticache {}'.format(aws_identifier, cache_cluster_ids))
+
+
+    for cache_node in cache_nodes:
+        aws_cache_node_id = cache_node['CacheNodeId']
+        if aws_cache_node_id == cache_node_id:
+            break
+    else:
+        raise RuntimeError('chache node id {} not found in {}'.format(cache_node_id, cache_nodes))
+
+    dns = cache_node['Endpoint']['Address']
+    port = cache_node['Endpoint']['Port']
+    private_ip = resolve_dns(dns, dns_servers)
+    if not ipaddress.ip_address(private_ip).is_private:
+        raise NotPrivateIpError('ip {} is not private'.format(private_ip))
+    return private_ip, port
 
 def load_config():
     path = '~/.medusarc'
@@ -182,6 +209,19 @@ def get_db_identifier(argv, db_aliases, credentials):
     db_identifier = db_aliases[db_identifier]
     return db_identifier
 
+def get_cache_node_id(argv, db_identifier, credentials):
+    cache_node_ids = credentials[db_identifier]['cache_node_ids']
+    cache_node_ids = sorted(cache_node_ids)
+    if not len(argv):
+        print('expected cache node id, allowed values are {}'.format(cache_node_ids))
+        sys.exit(1)
+
+    cache_node_id = argv.pop(0)
+    if cache_node_id not in cache_node_ids:
+        print('expected cache node id, allowed values are {}'.format(cache_node_ids))
+        sys.exit(1)
+
+    return cache_node_id
 
 
 def redshift_cmd(argv, db_identifier, credentials, dns_servers):
@@ -219,9 +259,10 @@ def mysql_cmd(argv, db_identifier, credentials, dns_servers):
 
 def redis_cmd(argv, db_identifier, credentials, dns_servers):
     db_name = get_db(argv, db_identifier, credentials)
+    cache_node_id = get_cache_node_id(argv, db_identifier, credentials)
 
     aws_identifier = credentials[db_identifier]['aws_identifier']
-    ip, port = get_elasticache_private_ip_port(aws_identifier, dns_servers)
+    ip, port = get_elasticache_private_ip_port(aws_identifier, dns_servers, cache_node_id)
 
     cmd = rediscli['-h', ip, '-p', port, '-n', db_name]
     return cmd

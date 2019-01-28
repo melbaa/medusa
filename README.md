@@ -7,7 +7,7 @@ The supported datastores are:
 * Redshift
 * RDS postgresql
 * RDS mysql
-* ElastiCache redis
+* ElastiCache redis (single node, replication group, clustered)
 
 ## Requirements
 The script assumes it has access to the internal IPs of the clusters/datastores, which means you have to be in the same VPN.
@@ -60,6 +60,19 @@ datastores:
     users:
       user1: pass1
       user2: pass2
+
+
+  redis-example:
+    aliases:
+      - redis-example
+    aws_identifier: redis-example-0001-001
+    aws_type: elasticache-redis
+    cache_node_ids:
+      - '0001'
+    databases:
+      - 0
+
+
 
 ```
 
