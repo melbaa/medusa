@@ -7,6 +7,7 @@ The supported datastores are:
 * Redshift
 * RDS postgresql
 * RDS mysql
+* ElastiCache redis
 
 ## Requirements
 The script assumes it has access to the internal IPs of the clusters/datastores, which means you have to be in the same VPN.

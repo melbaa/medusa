@@ -113,7 +113,7 @@ def get_rds_private_ip_port(aws_identifier, dns_servers):
 
 def get_elasticache_private_ip_port(aws_identifier, dns_servers):
     # aws elasticache describe-replication-groups
-    # aws elasticache describe-cache-clusters  # single node clusters
+    # aws elasticache describe-cache-clusters --show-cache-node-info # single node clusters
     rc, out, err = aws['elasticache', 'describe-replication-groups', '--replication-group-id', aws_identifier].run(retcode=None)
     if rc:
         # out = aws['elasticache', 'describe-cache-clusters', '--cache-cluster-id', aws_identifier]()
@@ -235,7 +235,7 @@ aws_type_to_cmd = {
 
 
 
-def main():
+def main(argv=None):
     credentials, settings = load_config()
 
     # In EC2-VPC, the Amazon DNS server is located at the base of your VPC network range plus two
@@ -244,7 +244,8 @@ def main():
     # too hard to resolve VPC subnet, hardcode
     dns_servers = settings['dns_servers']['us_prod']
 
-    argv = sys.argv
+    if not argv:
+        argv = sys.argv
     cmd = argv.pop(0)
 
     # db_identifier, user, database change depending on passed value
@@ -253,6 +254,7 @@ def main():
     # TODO implement redis support (fileingest, tvc). might need database aliases or descriptions
     # TODO redis support doesn't need users, make them conditional based on db type
     # TODO redis single node clusters
+    # TODO memcache support
     # TODO implement partial prefix matches + check for ambiguous prefixes
     # TODO change sort in help output
 
