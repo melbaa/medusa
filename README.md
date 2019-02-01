@@ -8,6 +8,7 @@ The supported datastores are:
 * RDS postgresql
 * RDS mysql
 * ElastiCache redis (single node, replication group, clustered)
+* InfluxDB
 
 ## Requirements
 The script assumes it has access to the internal IPs of the clusters/datastores, which means you have to be in the same VPN.
@@ -53,7 +54,7 @@ datastores:
     - redshift-example
     - re
     aws_identifier: prod-redshift-example
-    aws_type: redishft
+    aws_type: redshift
     databases:
     - exampledb1
     - exampledb2
@@ -71,6 +72,19 @@ datastores:
       - '0001'
     databases:
       - 0
+
+  influx-example:
+    aliases:
+      - influx-example
+    aws_identifier: influxdb.example.com
+    aws_type: influxdb
+    databases:
+      - exampledb1
+      - exampledb2
+    users:
+      user1: pass1
+      user2: pass2
+
 
 
 

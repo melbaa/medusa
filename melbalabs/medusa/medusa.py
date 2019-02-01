@@ -15,14 +15,15 @@ from plumbum.cmd import aws
 from plumbum.cmd import psql
 from plumbum.cmd import dig
 from plumbum.cmd import mysql
+from plumbum.cmd import influx
 
 rediscli = local['redis-cli']
 
-
-AWS_TYPE_REDSHIFT = 'redishft'
+AWS_TYPE_REDSHIFT = 'redshift'
 AWS_TYPE_RDS_POSTGRES = 'rds-postgres'
 AWS_TYPE_RDS_MYSQL = 'rds-mysql'
 AWS_TYPE_ELASTICACHE_REDIS = 'elasticache-redis'
+AWS_TYPE_INFLUXDB = 'influxdb'
 
 class NotPrivateIpError(Exception):
     pass
@@ -267,11 +268,25 @@ def redis_cmd(argv, db_identifier, credentials, dns_servers):
     cmd = rediscli['-h', ip, '-p', port, '-n', db_name]
     return cmd
 
+def influx_cmd(argv, db_identifier, credentials, dns_servers):
+    db_user, db_password = get_user(argv, db_identifier, credentials)
+    db_name = get_db(argv, db_identifier, credentials)
+    aws_identifier = credentials[db_identifier]['aws_identifier']
+    private_ip = resolve_dns(aws_identifier, dns_servers)
+
+    cmd = influx['-host', private_ip, '-database', db_name, '-username', db_user,
+        '-password', db_password, '-precision', 'rfc3339']
+    return cmd
+
+
+
+
 aws_type_to_cmd = {
     AWS_TYPE_REDSHIFT: redshift_cmd,
     AWS_TYPE_RDS_POSTGRES: postgres_cmd,
     AWS_TYPE_RDS_MYSQL: mysql_cmd,
     AWS_TYPE_ELASTICACHE_REDIS: redis_cmd,
+    AWS_TYPE_INFLUXDB: influx_cmd,
 }
 
 
@@ -292,10 +307,8 @@ def main(argv=None):
     # db_identifier, user, database change depending on passed value
 
     # TODO implement multi aws account support
-    # TODO implement redis support (fileingest, tvc). might need database aliases or descriptions
-    # TODO redis support doesn't need users, make them conditional based on db type
-    # TODO redis single node clusters
     # TODO memcache support
+    # TODO redis db aliases?
     # TODO implement partial prefix matches + check for ambiguous prefixes
     # TODO change sort in help output
 
