@@ -159,11 +159,18 @@ def get_elasticache_private_ip_port(aws_identifier, dns_servers, cache_node_id):
     return private_ip, port
 
 def load_config():
-    path = '~/.medusarc'
-    path = os.path.expanduser(path)
-    with open(path) as f:
-        config = yaml.load(f)
-    return config['datastores'], config['settings']
+    config_locations = [
+        os.path.expanduser('~/.medusarc'),
+        '/etc/medusarc',
+    ]
+    for path in config_locations:
+        try:
+            with open(path) as f:
+                config = yaml.load(f)
+            return config['datastores'], config['settings']
+        except FileNotFoundError:
+            pass
+    raise RuntimeError('no config found in any of {}'.format(config_locations))
 
 def get_user(argv, db_identifier, credentials):
     db_users = list(credentials[db_identifier]['users'].keys())
