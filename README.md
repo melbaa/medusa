@@ -13,7 +13,7 @@ The supported datastores are:
 ## Requirements
 The script assumes it has access to the internal IPs of the clusters/datastores, which means you have to be in the same VPN.
 
-The script assumes you have configured awscli for your account. Also needs dig, psql (postgresql client), mysql (mysql client)
+The script assumes you have configured awscli for your account. Also needs dig, psql (postgresql client), mysql (mysql client), influx (influxdb client), redis-cli (redis client).
 
 ## Installation
 Create a virtualenv with the libs in requirements.txt.
