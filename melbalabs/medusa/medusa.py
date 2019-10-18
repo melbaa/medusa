@@ -166,7 +166,7 @@ def load_config():
     for path in config_locations:
         try:
             with open(path) as f:
-                config = yaml.load(f)
+                config = yaml.safe_load(f)
             return config['datastores'], config['settings']
         except FileNotFoundError:
             pass

@@ -20,5 +20,8 @@ COPY . /app
 RUN pip install .
 ENTRYPOINT ["medusa"]
 
+# build with
+# docker build -t medusa .
+
 # run with
 # docker run -it --mount type=bind,source=$HOME/.medusarc,target=/etc/medusarc,readonly --mount type=bind,source=$HOME/.aws/,target=/root/.aws/,readonly medusa
