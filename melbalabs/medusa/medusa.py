@@ -202,16 +202,21 @@ def get_db(argv, db_identifier, credentials):
 
     return db_name
 
+def print_db_identifiers(db_identifiers):
+    for ident in db_identifiers:
+        print(' ', ident)
 
 def get_db_identifier(argv, db_aliases, credentials):
     db_identifiers = sorted(db_aliases.keys())
     if not len(argv):
-        print('expected db identifier, allowed values are {}'.format(db_identifiers))
+        print('expected db identifier, allowed values are:')
+        print_db_identifiers(db_identifiers)
         sys.exit(1)
 
     db_identifier = argv.pop(0)
     if db_identifier not in db_identifiers:
-        print('expected db identifier, allowed values are {}'.format(db_identifiers))
+        print('expected db identifier, allowed values are:')
+        print_db_identifiers(db_identifiers)
         sys.exit(1)
 
     db_identifier = db_aliases[db_identifier]
