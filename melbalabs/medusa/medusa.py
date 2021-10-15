@@ -23,6 +23,7 @@ AWS_TYPE_REDSHIFT = 'redshift'
 AWS_TYPE_RDS_POSTGRES = 'rds-postgres'
 AWS_TYPE_RDS_MYSQL = 'rds-mysql'
 AWS_TYPE_ELASTICACHE_REDIS = 'elasticache-redis'
+AWS_TYPE_ELASTICACHE_REDIS_SHARDED = 'elasticache-redis-sharded'  # aka CLUSTER MODE
 AWS_TYPE_INFLUXDB = 'influxdb'
 
 class NotPrivateIpError(Exception):
@@ -280,6 +281,25 @@ def redis_cmd(argv, db_identifier, credentials, dns_servers):
     cmd = rediscli['-h', ip, '-p', port, '-n', db_name]
     return cmd
 
+def redis_sharded_cmd(argv, db_identifier, credentials, dns_servers):
+    db_name = get_db(argv, db_identifier, credentials)
+    aws_identifier = credentials[db_identifier]['aws_identifier']
+
+    out = aws['elasticache', 'describe-replication-groups', '--replication-group-id', aws_identifier]()
+    reply = json.loads(out)
+    if not reply['ReplicationGroups']:
+        print('error: unknown cluster')
+        sys.exit(1)
+    dns = reply['ReplicationGroups'][0]['ConfigurationEndpoint']['Address']
+    private_ip = resolve_dns(dns, dns_servers)
+
+    customcmd = credentials[db_identifier]['customcmd']
+    customcmd = customcmd.format(redisip=private_ip, db=db_name)
+    customcmd = customcmd.split()
+    cmd = local[customcmd[0]].__getitem__(args=customcmd[1:])
+    return cmd
+
+
 def influx_cmd(argv, db_identifier, credentials, dns_servers):
     db_user, db_password = get_user(argv, db_identifier, credentials)
     db_name = get_db(argv, db_identifier, credentials)
@@ -298,6 +318,7 @@ aws_type_to_cmd = {
     AWS_TYPE_RDS_POSTGRES: postgres_cmd,
     AWS_TYPE_RDS_MYSQL: mysql_cmd,
     AWS_TYPE_ELASTICACHE_REDIS: redis_cmd,
+    AWS_TYPE_ELASTICACHE_REDIS_SHARDED: redis_sharded_cmd,
     AWS_TYPE_INFLUXDB: influx_cmd,
 }
 
